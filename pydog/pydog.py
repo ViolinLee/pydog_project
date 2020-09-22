@@ -1,24 +1,37 @@
 # -*- coding: utf-8
 
-from pydog.config import *
+from math import pi, cos, sin
 from pydog.hal.servo import Servos
-from math import pi, acos, atan2, sqrt
+from machine import I2C
+from pydog.controller.kinematics import fk_engine, ik_engine
+from pydog.utils import load_calibration_data, save_calibration_data
+from pydog.gait import *
 
 
-class Pydog(object):
-    def __init__(self, l1, l2, joints_ids, init_joints_angles, init_servos_pos, calibration_txt,
+class PyDog(object):
+    def __init__(self, body_l, body_w, l1, l2,
+                 joints_ids, init_joints_angles, init_servos_pos, calibration_txt,
                  pca_i2c_scl, pca_i2c_sda, pca_i2c_freq, pca_i2c_adr):
         # initialize legs angles
         pca_i2c = I2C(pca_i2c_scl, pca_i2c_sda, pca_i2c_freq)
 
+        self.body_l = body_l
+        self.body_w = body_w
         self.l1 = l1
         self.l2 = l2
         self.servos = Servos(pca_i2c, address=pca_i2c_adr)
-        self.init_servos_pos = list(init_servos_pos)
-        self.joints_angles = list(init_joints_angles)
         self.joints_ids = joints_ids
+        self.init_servos_pos = list(init_servos_pos)
+        self.init_joints_angles = list(init_joints_angles)
+        """The coordinates of the leg tip relative to the its first joint (X-Front Z-Down)"""
+        self.init_coord = self.fk_calculate(init_joints_angles)
+
+        self.expected_joints_angles = self.init_joints_angles
+        self.expected_coord = self.init_coord
+
         self.calibration_txt = calibration_txt
         self.calibrate()
+
         self.move_leg()
 
     def calibrate(self):
@@ -88,45 +101,93 @@ class Pydog(object):
             angles_list.append(femur)
             angles_list.append(tieba)
 
-        self.joints_angles = angles_list
-        print("Inverse Kinematic Calculation Result\n:", self.joints_angles)
+        self.expected_joints_angles = angles_list
+        self.expected_coord = [fr_coord, br_coord, bl_coord, fl_coord]
+        print("Inverse Kinematic Calculation Result\n:", self.expected_joints_angles)
+
+    def fk_calculate(self, joints_angles):
+        coords = []
+        for i in range(0, len(joints_angles), 2):
+            xy_coord = fk_engine(self.l1, self.l2, joints_angles[i:i + 2])
+            coords.append(xy_coord)
+        return coords
 
     def move_leg(self):
-        servos_pos = self.joint2servo(self.joints_angles)
+        servos_pos = self.joint2servo(self.expected_joints_angles)
         print("Move Leg by Driving Servos to\n:", servos_pos)
+
         for i, leg_id in enumerate(self.joints_ids):
             self.servos.position(leg_id, degrees=servos_pos[i])
 
+    def move2start(self):
+        self.expected_joints_angles = self.init_joints_angles
+        self.expected_coord = self.init_coord
+        self.move_leg()
 
-def ik_engine(l1, l2, xy_coord):
-    x = -xy_coord[0]
-    y = xy_coord[1]
+    def process_trans(self, axis, offset, elapsed=50, duration=1000):
+        remain_time = duration
+        if axis == 0:
+            fr_coord, br_coord, bl_coord, fl_coord = [[self.expected_coord[i][0] + offset, self.expected_coord[i][1]]
+                                                      for i in range(4)]
+        else:
+            fr_coord, br_coord, bl_coord, fl_coord = [[self.expected_coord[i][0], self.expected_coord[i][1] + offset]
+                                                      for i in range(4)]
 
-    tibia = pi - acos((x ** 2 + y ** 2 - l1 ** 2 - l2 ** 2) / (-2 * l1 * l2))
-    fai = acos((l1 ** 2 + x ** 2 + y ** 2 - l2 ** 2) / (2 * l1 * sqrt(x ** 2 + y ** 2)))
-    alpha = atan2(y, x)
-    femur = alpha - fai
+        inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord = self.expected_coord
+        while elapsed <= remain_time:
+            ratio = elapsed / remain_time
+            for i in range(2):
+                inter_fr_coord[i] += (fr_coord[i] - inter_fr_coord[i]) * ratio
+                inter_br_coord[i] += (br_coord[i] - inter_br_coord[i]) * ratio
+                inter_bl_coord[i] += (bl_coord[i] - inter_bl_coord[i]) * ratio
+                inter_fl_coord[i] += (fl_coord[i] - inter_fl_coord[i]) * ratio
 
-    tibia = 180 * tibia / pi
-    femur = 180 * femur / pi
+            self.ik_calculate(inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord)
+            self.move_leg()
 
-    return femur, tibia
+            remain_time -= elapsed
 
+    def process_rotate(self, roll_pitch_angles, elapsed=50, duration=1000):
+        half_bl = self.body_l/2
+        half_bw = self.body_w/2
+        bh = self.init_coord[0][1]
 
-def load_calibration_data(calibration_txt):
-    data_dict = {}
-    with open(calibration_txt, 'r') as f:
-        for line in f.readlines():
-            (key, val) = line.split()
-            data_dict[key] = int(val)
-    print("Successfully Loaded Calibration Data: ", data_dict)
-    return data_dict
+        remain_time = duration
+        roll, pitch = [angle * pi / 180 for angle in roll_pitch_angles]  # 8DOF dog has yaw angle equal 0.
 
+        # Frontal Left
+        fl_x = half_bl - half_bl * cos(pitch)
+        fl_z = bh + half_bw*sin(roll)/2 + half_bl*cos(roll)*sin(pitch)
+        # Frontal Right
+        fr_x = fl_x
+        fr_z = bh - half_bw*sin(roll)/2 + half_bl*cos(roll)*sin(pitch)
+        # Behind Left
+        bl_x = half_bl * cos(pitch) - half_bl
+        bl_z = bh + half_bw*sin(roll)/2 - half_bl*cos(roll)*sin(pitch)
+        # Behind Right
+        br_x = bl_x
+        br_z = bh - half_bw*sin(roll)/2 - half_bl*cos(roll)*sin(pitch)
 
-def save_calibration_data(calibration_txt, data_dict):
-    with open(calibration_txt, 'w') as f:
-        for key, values in data_dict.items():
-            f.write(key + '\t' + str(values) + '\n')
-    print("Successfully Saved Calibration Data: ", data_dict)
+        fr_coord = [fr_x, fr_z]
+        br_coord = [br_x, br_z]
+        fl_coord = [fl_x, fl_z]
+        bl_coord = [bl_x, bl_z]
+        inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord = self.expected_coord
+        while elapsed <= remain_time:
+            ratio = elapsed / remain_time
+            for i in range(2):
+                inter_fr_coord[i] += (fr_coord[i] - inter_fr_coord[i]) * ratio
+                inter_br_coord[i] += (br_coord[i] - inter_br_coord[i]) * ratio
+                inter_bl_coord[i] += (bl_coord[i] - inter_bl_coord[i]) * ratio
+                inter_fl_coord[i] += (fl_coord[i] - inter_fl_coord[i]) * ratio
+            self.ik_calculate(inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord)
+            self.move_leg()
+            remain_time -= elapsed
 
+    def process_demo_gait(self, mode, elapsed):
 
+        return
+
+    def update_state(self):
+        """主程序里控制器每调节一次之前需要确保状态（读取和处理传感器数据）已更新"""
+        return
