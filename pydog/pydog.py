@@ -13,7 +13,7 @@ class PyDog(object):
                  joints_ids, init_joints_angles, init_servos_pos, calibration_txt,
                  pca_i2c_scl, pca_i2c_sda, pca_i2c_freq, pca_i2c_adr):
         # initialize legs angles
-        pca_i2c = I2C(pca_i2c_scl, pca_i2c_sda, pca_i2c_freq)
+        pca_i2c = I2C(scl=pca_i2c_scl, sda=pca_i2c_sda, freq=pca_i2c_freq)
 
         self.body_l = body_l
         self.body_w = body_w
@@ -70,26 +70,27 @@ class PyDog(object):
                 else:
                     print("Error input! Please try again.")
                     continue
-                if sum([abs(val) for val in inc_servo_pos_dict.values()]) > 0:
-                    save_calibration_data(self.calibration_txt, inc_servo_pos_dict)
-                else:
-                    inc_servo_pos_dict = load_calibration_data(self.calibration_txt)
-                    self.init_servos_pos = [self.init_servos_pos[i] + inc_servo_pos_dict[servo_code]
-                                            for i, servo_code in enumerate(servos_codes)]
+
+            if sum([abs(val) for val in inc_servo_pos_dict.values()]) > 0:
+                save_calibration_data(self.calibration_txt, inc_servo_pos_dict)
+            else:
+                inc_servo_pos_dict = load_calibration_data(self.calibration_txt)
+                self.init_servos_pos = [self.init_servos_pos[i] + inc_servo_pos_dict[servo_code]
+                                        for i, servo_code in enumerate(servos_codes)]
 
     def joint2servo(self, joints_angles):
         upper_operators = [1, 1, -1, -1]
-        lower_operators = [[1, -1], [1, -1], [-1, 1], [-1, 1]]
+        lower_operators = [-1, -1, 1, 1]
 
         servos_pos = []
         for i, joint_angle in enumerate(joints_angles):
             if i % 2 == 0:
                 operator = upper_operators[int(i / 2)]
-                upper_servo_pos = round(self.init_servos_pos[i] + operator * joint_angle, 4)
+                upper_servo_pos = round(self.init_servos_pos[i] + operator*(joint_angle-self.init_joints_angles[i]), 4)
                 servos_pos.append(upper_servo_pos)
             else:
-                operators = lower_operators[int(i / 2)]
-                lower_servo_pos = round(self.init_servos_pos[i] + operators[0] * 90 + operators[1] * joint_angle, 4)
+                operator = lower_operators[int(i / 2)]
+                lower_servo_pos = round(self.init_servos_pos[i] + operator*(joint_angle-self.init_joints_angles[i]), 4)
                 servos_pos.append(lower_servo_pos)
 
         return servos_pos
