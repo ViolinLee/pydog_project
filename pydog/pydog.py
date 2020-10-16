@@ -1,6 +1,7 @@
 # -*- coding: utf-8
 
-from math import pi, cos, sin
+from math import pi, cos, sin, atan
+from time import sleep_ms
 from pydog.hal.servo import Servos
 from machine import I2C
 from pydog.controller.kinematics import fk_engine, ik_engine
@@ -26,11 +27,11 @@ class PyDog(object):
         """The coordinates of the leg tip relative to the its first joint (X-Front Z-Down)"""
         self.init_coord = self.fk_calculate(init_joints_angles)
 
-        self.expected_joints_angles = self.init_joints_angles
-        self.expected_coord = self.init_coord
+        self.expected_joints_angles = list(init_joints_angles) # Avoid shallow copy
+        self.expected_coord = self.fk_calculate(init_joints_angles)  # Avoid shallow copy
 
         self.calibration_txt = calibration_txt
-        self.calibrate()
+        # self.calibrate()
 
         self.move_leg()
 
@@ -104,7 +105,7 @@ class PyDog(object):
 
         self.expected_joints_angles = angles_list
         self.expected_coord = [fr_coord, br_coord, bl_coord, fl_coord]
-        print("Inverse Kinematic Calculation Result\n:", self.expected_joints_angles)
+        # print("Inverse Kinematic Calculation Result\n:", self.expected_joints_angles)
 
     def fk_calculate(self, joints_angles):
         coords = []
@@ -115,14 +116,14 @@ class PyDog(object):
 
     def move_leg(self):
         servos_pos = self.joint2servo(self.expected_joints_angles)
-        print("Move Leg by Driving Servos to\n:", servos_pos)
+        # print("Move Leg by Driving Servos to\n:", servos_pos)
 
         for i, leg_id in enumerate(self.joints_ids):
             self.servos.position(leg_id, degrees=servos_pos[i])
 
     def move2start(self):
-        self.expected_joints_angles = self.init_joints_angles
-        self.expected_coord = self.init_coord
+        self.expected_joints_angles = list(self.init_joints_angles)  # self.expected_joints_angles = self.init_joints_angles
+        self.expected_coord = self.fk_calculate(self.init_joints_angles)  # self.expected_coord = self.init_coord
         self.move_leg()
 
     def process_trans(self, axis, offset, elapsed=50, duration=1000):
@@ -145,29 +146,30 @@ class PyDog(object):
 
             self.ik_calculate(inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord)
             self.move_leg()
+            sleep_ms(elapsed)
 
             remain_time -= elapsed
 
-    def process_rotate(self, roll_pitch_angles, elapsed=50, duration=1000):
-        half_bl = self.body_l/2
-        half_bw = self.body_w/2
-        bh = self.init_coord[0][1]
+    def process_rotate(self, height, roll_pitch_angles, elapsed=50, duration=1000):
+        half_bl = self.body_l/2  # Body Length
+        half_bw = self.body_w/2  # Body Width
+        height  # Init Height
 
         remain_time = duration
         roll, pitch = [angle * pi / 180 for angle in roll_pitch_angles]  # 8DOF dog has yaw angle equal 0.
 
         # Frontal Left
         fl_x = half_bl - half_bl * cos(pitch)
-        fl_z = bh + half_bw*sin(roll)/2 + half_bl*cos(roll)*sin(pitch)
+        fl_z = ((height + half_bw*sin(roll)/2) + half_bl*sin(pitch))/cos(roll)
         # Frontal Right
         fr_x = fl_x
-        fr_z = bh - half_bw*sin(roll)/2 + half_bl*cos(roll)*sin(pitch)
+        fr_z = ((height - half_bw*sin(roll)/2) + half_bl*sin(pitch))/cos(roll)
         # Behind Left
         bl_x = half_bl * cos(pitch) - half_bl
-        bl_z = bh + half_bw*sin(roll)/2 - half_bl*cos(roll)*sin(pitch)
+        bl_z = ((height + half_bw*sin(roll)/2) - half_bl*sin(pitch))/cos(roll)
         # Behind Right
         br_x = bl_x
-        br_z = bh - half_bw*sin(roll)/2 - half_bl*cos(roll)*sin(pitch)
+        br_z = ((height - half_bw*sin(roll)/2) - half_bl*sin(pitch))/cos(roll)
 
         fr_coord = [fr_x, fr_z]
         br_coord = [br_x, br_z]
@@ -183,7 +185,19 @@ class PyDog(object):
                 inter_fl_coord[i] += (fl_coord[i] - inter_fl_coord[i]) * ratio
             self.ik_calculate(inter_fr_coord, inter_br_coord, inter_bl_coord, inter_fl_coord)
             self.move_leg()
+            sleep_ms(elapsed)
+
             remain_time -= elapsed
+
+    def process_cone_rotate(self, height, h=5, r=1, step=0.12, home=True):
+        theta = 0
+        while theta <= 2*pi:
+            theta += step
+            roll_angle = atan(r * cos(theta) / h) * 180 / pi
+            pitch_angle = atan(r * sin(theta) / h) * 180 / pi
+            self.process_rotate(height, [roll_angle, pitch_angle], elapsed=12, duration=12)
+        if home:
+            self.process_rotate(height, [0, 0])
 
     def process_demo_gait(self, mode, elapsed):
 

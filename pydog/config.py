@@ -3,9 +3,11 @@
 # Physical Attributes
 l1 = 80
 l2 = 62.5
+body_l = 202
+body_w = 105
 
-init_servos_pos = (20, 90, 20, 90, 20, 90, 20, 90)
-init_joints_angles = (0, 90, 0, 90, 0, 90, 0, 90)
+init_servos_pos = (154, 110, 149, 104, 23, 70, 18, 73)  # Assembly Features
+init_joints_angles = (52, 88, 52, 88, 52, 88, 52, 88)  # Kinematics Model
 calibration_txt = "pydog/calibration.txt"
 
 # IOs Mappings
@@ -24,6 +26,6 @@ kp_weight = 0.04
 
 # PCA9685 Setting
 pca_i2c_adr = 0x40
-pca_i2c_scl = "X9"
-pca_i2c_sda = "X10"
+pca_i2c_scl = "Y9"
+pca_i2c_sda = "Y10"
 pca_i2c_freq = 100000
