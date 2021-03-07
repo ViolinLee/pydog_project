@@ -1,0 +1,8 @@
+fr0 0
+fr1 0
+br0 0
+br1 0
+bl0 0
+bl1 0
+fl0 0
+fl1 0
